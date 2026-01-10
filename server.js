@@ -37,7 +37,7 @@ app.use(express.json());
 
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: process.env.CLIENT_URL || "*",
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -82,10 +82,8 @@ app.use("/api", authRoutes);
 app.use("/api", passwordRoutes);
 app.use("/api", adminRoutes);
 
-// ❌ Removed: app.use("/api/system", systemRoutes);
-
 /* =====================================================
-   🟢 DEFAULT ADMIN CREATION
+   🟢 DEFAULT ADMIN (LOCAL ONLY)
 ===================================================== */
 async function createDefaultAdmin() {
   try {
@@ -101,15 +99,16 @@ async function createDefaultAdmin() {
         profilePic: "",
         password: hashed,
       });
-      console.log("✅ Default admin created: zaibuniversity@gmail.com / abcd1234");
-    } else {
-      console.log("ℹ️ Default admin already exists");
+      console.log("✅ Default admin created (LOCAL)");
     }
   } catch (err) {
-    console.error("❌ Error creating default admin:", err.message);
+    console.error("❌ Admin creation error:", err.message);
   }
 }
-createDefaultAdmin();
+
+if (process.env.NODE_ENV !== "production") {
+  createDefaultAdmin();
+}
 
 /* =====================================================
    ⚡ START METER SIMULATION
@@ -142,7 +141,9 @@ app.get("/api/system/health", async (req, res) => {
     const dataAccuracy =
       totalMeters > 0 ? ((activeMeters / totalMeters) * 100).toFixed(1) : 0;
 
-    const lastSync = getLastSyncTime ? getLastSyncTime() : new Date().toISOString();
+    const lastSync = getLastSyncTime
+      ? getLastSyncTime()
+      : new Date().toISOString();
 
     res.json({
       network: networkStatus,
@@ -151,80 +152,7 @@ app.get("/api/system/health", async (req, res) => {
       lastSync,
     });
   } catch (err) {
-    console.error("❌ System health error:", err);
     res.status(500).json({ message: "Failed to fetch system health" });
-  }
-});
-
-/* =====================================================
-   🟢 SYSTEM STATUS ROUTE (FINAL THEFT DETECTION LOGIC)
-===================================================== */
-app.get("/api/system/status", async (req, res) => {
-  try {
-    const meters = await Meter.find();
-
-    // Identify meters by type or fallback to IDs
-    const streetInput =
-      meters.find((m) => m.type === "streetInput") ||
-      meters.find((m) => m.meterId === "A-001");
-
-    const toNext =
-      meters.find((m) => m.type === "toNext") ||
-      meters.find((m) => m.meterId === "A-005");
-
-    const houses =
-      meters.filter((m) => m.type === "house")?.length
-        ? meters.filter((m) => m.type === "house")
-        : meters.filter((m) => ["A-002", "A-003", "A-004"].includes(m.meterId));
-
-    // Read power values (watts)
-    const streetInputPower = streetInput?.watts || 0;
-    const toNextPower = toNext?.watts || 0;
-    const houseTotalPower = houses.reduce((sum, h) => sum + (h.watts || 0), 0);
-
-    // Power Loss Formula
-    const powerLoss = streetInputPower - toNextPower - houseTotalPower;
-
-    // Theft Detection Logic (based on 1 full-day = 1 minute)
-    let theftStatus = "No Theft";
-
-    // Calculate loss percentage relative to street input
-    const lossPercent =
-      streetInputPower > 0
-        ? (Math.abs(powerLoss) / streetInputPower) * 100
-        : 0;
-
-    // Apply threshold
-    if (lossPercent > 5) theftStatus = "Theft Detected";
-    else theftStatus = "No Theft";
-
-    // Prepare all meters for frontend
-    const meterStatus = meters.map((m) => ({
-      id: m.meterId,
-      name: m.name,
-      watts: m.watts || 0,
-      voltage: m.voltage || 0,
-      current: m.current || 0,
-      status: m.status || (m.watts > 0 ? "Online" : "Offline"),
-    }));
-
-    // ✅ Fetch the admin area dynamically from DB
-    const admin = await Admin.findOne(); 
-    const areaName = admin?.area || "Unknown Area";
-
-    res.json({
-      area: areaName, // <-- updated dynamically
-      streetInputPower,
-      houseTotalPower,
-      toNextPower,
-      powerLoss,
-      theftStatus,
-      meterStatus,
-      timestamp: new Date(),
-    });
-  } catch (err) {
-    console.error("❌ Failed to fetch system status:", err);
-    res.status(500).json({ message: "Failed to fetch system status" });
   }
 });
 
@@ -232,4 +160,6 @@ app.get("/api/system/status", async (req, res) => {
    🚀 START SERVER
 ===================================================== */
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`🚀 Server running on port ${PORT}`)
+);

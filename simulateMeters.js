@@ -1,5 +1,6 @@
-import Meter from "./models/Meter.js";
-import UsageLog from "./models/UsageLog.js";
+// sdp/backend/simulateMeters.js
+const Meter = require("./models/Meter");
+const UsageLog = require("./models/UsageLog");
 
 // ===============================
 // Initial Meters Setup
@@ -15,10 +16,13 @@ const initialMeters = [
 let simulationStarted = false;
 let loggingStarted = false;
 
+// 🕒 Last sync time for system health
+let lastSyncTime = null;
+
 // ===============================
 // Start Simulation
 // ===============================
-export const startMeterSimulation = async () => {
+const startMeterSimulation = async () => {
   try {
     if (simulationStarted) {
       console.log("⚙️ Simulation already running — skipping re-init.");
@@ -28,7 +32,11 @@ export const startMeterSimulation = async () => {
 
     // Ensure initial meters exist
     for (const data of initialMeters) {
-      await Meter.findOneAndUpdate({ meterId: data.meterId }, data, { upsert: true });
+      await Meter.findOneAndUpdate(
+        { meterId: data.meterId },
+        data,
+        { upsert: true }
+      );
     }
 
     console.log("⚡ Meter simulation started...");
@@ -45,7 +53,7 @@ export const startMeterSimulation = async () => {
       for (const house of houseMeters) {
         const watts = Math.floor(Math.random() * (300 - 50 + 1)) + 50;
         const voltage = 220;
-        const current = parseFloat((watts / voltage).toFixed(2));
+        const current = Number((watts / voltage).toFixed(2));
 
         Object.assign(house, {
           watts,
@@ -63,7 +71,7 @@ export const startMeterSimulation = async () => {
       if (toNextMeter) {
         const watts = Math.floor(Math.random() * (200 - 50 + 1)) + 50;
         const voltage = 220;
-        const current = parseFloat((watts / voltage).toFixed(2));
+        const current = Number((watts / voltage).toFixed(2));
 
         Object.assign(toNextMeter, {
           watts,
@@ -79,11 +87,14 @@ export const startMeterSimulation = async () => {
 
       // --- Update Street Input Meter ---
       if (streetInputMeter) {
-        const totalHousePower = houseMeters.reduce((sum, h) => sum + (h.watts || 0), 0);
+        const totalHousePower = houseMeters.reduce(
+          (sum, h) => sum + (h.watts || 0),
+          0
+        );
         const toNextPower = toNextMeter?.watts || 0;
         const watts = totalHousePower + toNextPower;
         const voltage = 220;
-        const current = parseFloat((watts / voltage).toFixed(2));
+        const current = Number((watts / voltage).toFixed(2));
 
         Object.assign(streetInputMeter, {
           watts,
@@ -97,10 +108,16 @@ export const startMeterSimulation = async () => {
         await streetInputMeter.save();
       }
 
+      // 🕒 Update system last sync time
+      lastSyncTime = new Date().toISOString();
+
       console.log({
         streetInput: streetInputMeter?.watts,
         toNext: toNextMeter?.watts,
-        houseTotal: houseMeters.reduce((s, h) => s + (h.watts || 0), 0),
+        houseTotal: houseMeters.reduce(
+          (s, h) => s + (h.watts || 0),
+          0
+        ),
       });
     }, 5000);
 
@@ -109,7 +126,6 @@ export const startMeterSimulation = async () => {
       loggingStarted = true;
       startLoggingIntervals();
     }
-
   } catch (err) {
     console.error("❌ Meter simulation error:", err.message);
   }
@@ -123,23 +139,32 @@ async function logUsage(type) {
     const meters = await Meter.find();
     if (!meters.length) return;
 
-    const streetInput = meters.find((m) => m.type === "streetInput")?.watts || 0;
-    const toNext = meters.find((m) => m.type === "toNext")?.watts || 0;
-    const houseTotal = meters.filter((m) => m.type === "house").reduce((sum, h) => sum + (h.watts || 0), 0);
+    const streetInput =
+      meters.find((m) => m.type === "streetInput")?.watts || 0;
+    const toNext =
+      meters.find((m) => m.type === "toNext")?.watts || 0;
+    const houseTotal = meters
+      .filter((m) => m.type === "house")
+      .reduce((sum, h) => sum + (h.watts || 0), 0);
 
     const powerLossRaw = streetInput - toNext - houseTotal;
     const powerLoss = Number(powerLossRaw.toFixed(2));
 
-    // Apply theft detection algorithm
-    const theftThreshold = Math.abs((streetInput - toNext - houseTotal) * 0.05);
-    const theftAlert = Math.abs(powerLoss) <= theftThreshold ? "No Theft" : "Theft Detected";
+    const theftThreshold = Math.abs(powerLossRaw * 0.05);
+    const theftAlert =
+      Math.abs(powerLoss) <= theftThreshold
+        ? "No Theft"
+        : "Theft Detected";
 
     const now = new Date();
     const roundedMinute = new Date(now.setSeconds(0, 0));
 
-    // Prevent duplicates (check if same minute exists)
-    const existing = await UsageLog.findOne({ date: roundedMinute, logType: type });
-    if (existing) return; // avoid duplicates
+    // Prevent duplicate logs
+    const existing = await UsageLog.findOne({
+      date: roundedMinute,
+      logType: type,
+    });
+    if (existing) return;
 
     await UsageLog.create({
       date: roundedMinute,
@@ -151,8 +176,9 @@ async function logUsage(type) {
       logType: type,
     });
 
-
-    console.log(`📘 ${type} Log Saved: Loss=${powerLoss}W, Status=${theftAlert}`);
+    console.log(
+      `📘 ${type} log saved | Loss=${powerLoss}W | Status=${theftAlert}`
+    );
   } catch (err) {
     console.error(`❌ Error saving ${type} log:`, err.message);
   }
@@ -161,10 +187,20 @@ async function logUsage(type) {
 // Run both Daily and Monthly intervals
 function startLoggingIntervals() {
   console.log("🕒 Logging started: 1 min (daily) | 5 min (monthly)");
-  // 🕒 Log every 1 minute for daily logs
+
+  // Daily logs → every 1 minute
   setInterval(() => logUsage("daily"), 60_000);
 
-  // 🕒 Log every 5 minutes for monthly logs
+  // Monthly logs → every 5 minutes
   setInterval(() => logUsage("monthly"), 5 * 60_000);
-
 }
+
+// ===============================
+// Export functions
+// ===============================
+const getLastSyncTime = () => lastSyncTime;
+
+module.exports = {
+  startMeterSimulation,
+  getLastSyncTime,
+};
